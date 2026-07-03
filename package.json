@@ -1,0 +1,33 @@
+{
+  "name": "homebridge-mitsubishi-hi-wifi-module",
+  "displayName": "Mitsubishi Heavy Industries WiFi Module",
+  "version": "1.1.2",
+  "description": "Homebridge plugin to control a Mitsubishi Heavy Industries (MHI) air conditioner via its built-in WiFi module (MHI_CNS_ATA_WIFI / the 'Climate Control' web app) in Apple HomeKit.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0 || ^2.0.0"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "homekit",
+    "mitsubishi",
+    "mitsubishi-heavy-industries",
+    "mhi",
+    "airco",
+    "air-conditioner",
+    "heatpump",
+    "climate"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "src",
+    "config.schema.json",
+    "README.md",
+    "LICENSE"
+  ]
+}

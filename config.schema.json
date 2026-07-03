@@ -1,0 +1,87 @@
+{
+  "pluginAlias": "MitsubishiHIWiFi",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Control a Mitsubishi Heavy Industries (MHI) air conditioner via its built-in WiFi module in HomeKit.",
+  "footerDisplay": "Find the device hostname/IP from the 'Climate Control' web app (e.g. `heatpump.local`). A static DHCP lease or `.local` hostname is recommended.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "default": "Mitsubishi HI WiFi",
+        "required": true
+      },
+      "devices": {
+        "title": "Devices",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string",
+              "default": "Mitsubishi AC",
+              "required": true,
+              "description": "Name shown in the Home app."
+            },
+            "host": {
+              "title": "Hostname or IP",
+              "type": "string",
+              "default": "heatpump.local",
+              "required": true,
+              "description": "e.g. heatpump.local or 192.168.1.50"
+            },
+            "pollInterval": {
+              "title": "Poll Interval (seconds)",
+              "type": "integer",
+              "default": 10,
+              "minimum": 3,
+              "maximum": 600,
+              "description": "How often to refresh the device state."
+            },
+            "exposeSilentMode": {
+              "title": "Expose 'Silent' switch",
+              "type": "boolean",
+              "default": true
+            },
+            "exposeFanAuto": {
+              "title": "Expose 'Auto Fan' switch",
+              "type": "boolean",
+              "default": true
+            },
+            "exposeDryMode": {
+              "title": "Expose 'Dry' mode switch",
+              "type": "boolean",
+              "default": false
+            },
+            "exposeFanMode": {
+              "title": "Expose 'Fan Only' mode switch",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "layout": [
+    { "key": "name" },
+    {
+      "key": "devices",
+      "type": "array",
+      "title": "Devices",
+      "buttonText": "Add Device",
+      "items": [
+        "devices[].name",
+        "devices[].host",
+        "devices[].pollInterval",
+        "devices[].exposeSilentMode",
+        "devices[].exposeFanAuto",
+        "devices[].exposeDryMode",
+        "devices[].exposeFanMode"
+      ]
+    }
+  ]
+}
