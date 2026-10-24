@@ -1,10 +1,11 @@
 'use strict';
 
 const { MhiDevice } = require('./device');
+const { SensorServices } = require('./sensors');
+const { ensureNamedService } = require('./services');
+const { temperatureLimits, clamp, currentActivity, hasFault } = require('./mapping');
 
 const DEFAULT_POLL_INTERVAL = 10; // seconds
-const DEFAULT_MIN_TEMP = 16;
-const DEFAULT_MAX_TEMP = 31;
 const TEMP_STEP = 0.5;
 
 // Fan speeds 1..4 mapped onto a 0-100 RotationSpeed slider (step 25).
@@ -29,15 +30,23 @@ class MhiAccessory {
 
     // Last known full state from the device.
     this.state = null;
-    // Temperature limits, refined once we have real state.
-    this.minTemp = DEFAULT_MIN_TEMP;
-    this.maxTemp = DEFAULT_MAX_TEMP;
     // Remembers the last heat/cool/auto mode so the Dry/Fan switches can revert.
     this.lastClimateMode = 'cool';
+    // Shown on the speed slider while the fan runs on auto.
+    this.lastManualFan = null;
+    this.lastProtection = undefined;
 
     this._setTimers = new Map();
 
     this.setupServices();
+    this.sensors = new SensorServices({
+      accessory,
+      hap: platform.api.hap,
+      config,
+      log: this.log,
+      name: this.name,
+      onServicesChanged: () => platform.api.updatePlatformAccessories([accessory]),
+    });
     this.startPolling();
   }
 
@@ -89,17 +98,25 @@ class MhiAccessory {
       .setProps({ minValue: -40, maxValue: 100, minStep: 0.1 })
       .onGet(() => this.getCurrentTemperature());
 
-    const tempProps = { minValue: this.minTemp, maxValue: this.maxTemp, minStep: TEMP_STEP };
     this.hc
       .getCharacteristic(Characteristic.CoolingThresholdTemperature)
-      .setProps(tempProps)
-      .onGet(() => this.getTargetTemperature())
+      .setProps(this.thresholdProps('cool'))
+      .onGet(() => this.getThresholdTemperature('cool'))
       .onSet((v) => this.setTargetTemperature(v));
     this.hc
       .getCharacteristic(Characteristic.HeatingThresholdTemperature)
-      .setProps(tempProps)
-      .onGet(() => this.getTargetTemperature())
+      .setProps(this.thresholdProps('heat'))
+      .onGet(() => this.getThresholdTemperature('heat'))
       .onSet((v) => this.setTargetTemperature(v));
+
+    // HeaterCooler doesn't list StatusFault as optional; register it so HAP
+    // doesn't warn about an unknown characteristic.
+    if (!this.hc.testCharacteristic(Characteristic.StatusFault)) {
+      this.hc.addOptionalCharacteristic(Characteristic.StatusFault);
+    }
+    this.hc
+      .getCharacteristic(Characteristic.StatusFault)
+      .onGet(() => this.getStatusFault());
 
     // Fan speed (1..4). "auto" is handled by the optional Auto Fan switch.
     this.hc
@@ -151,31 +168,16 @@ class MhiAccessory {
   configureSwitch(label, enabled, getter, setter) {
     const { Service, Characteristic } = this;
     const subtype = label.toLowerCase().replace(/\s+/g, '_');
-    // The switch is already grouped under the accessory, so use the short label
-    // on its own — prefixing the (long) accessory name gets truncated in the
-    // Home app ("Living Room A…").
-    const displayName = label;
-    const existing = this.accessory.getServiceById(Service.Switch, subtype);
 
     if (!enabled) {
+      const existing = this.accessory.getServiceById(Service.Switch, subtype);
       if (existing) {
         this.accessory.removeService(existing);
       }
       return null;
     }
 
-    const svc = existing || this.accessory.addService(Service.Switch, displayName, subtype);
-    svc.setCharacteristic(Characteristic.Name, displayName);
-    // ConfiguredName is what the Home app actually shows for extra services on
-    // a single accessory; without it every tile inherits the accessory name.
-    // Register it as optional first so HAP doesn't warn about an unknown
-    // characteristic on the Switch service.
-    if (Characteristic.ConfiguredName) {
-      if (!svc.testCharacteristic(Characteristic.ConfiguredName)) {
-        svc.addOptionalCharacteristic(Characteristic.ConfiguredName);
-      }
-      svc.setCharacteristic(Characteristic.ConfiguredName, displayName);
-    }
+    const svc = ensureNamedService(this.accessory, this.platform.api.hap, Service.Switch, label, subtype);
     svc
       .getCharacteristic(Characteristic.On)
       .onGet(() => {
@@ -203,13 +205,23 @@ class MhiAccessory {
   // State helpers
   // ---------------------------------------------------------------------------
 
+  heatpump() {
+    return (this.state && this.state.heatpump) || {};
+  }
+
   /** Safe access to a heatpump field from the last polled state. */
   heat(field) {
-    return this.state && this.state.heatpump ? this.state.heatpump[field] : undefined;
+    return this.heatpump()[field];
   }
 
   boolFromOnOff(v) {
     return v === 'on' || v === true;
+  }
+
+  /** @param {'heat'|'cool'} kind */
+  thresholdProps(kind) {
+    const { min, max } = temperatureLimits(this.heatpump(), kind);
+    return { minValue: min, maxValue: max, minStep: TEMP_STEP };
   }
 
   // ---------------------------------------------------------------------------
@@ -228,10 +240,16 @@ class MhiAccessory {
     return typeof t === 'number' ? t : 20;
   }
 
-  getTargetTemperature() {
+  /** @param {'heat'|'cool'} kind */
+  getThresholdTemperature(kind) {
+    const limits = temperatureLimits(this.heatpump(), kind);
     const t = this.heat('set_temperature');
-    const val = typeof t === 'number' ? t : this.minTemp;
-    return Math.min(this.maxTemp, Math.max(this.minTemp, val));
+    return clamp(typeof t === 'number' ? t : limits.min, limits);
+  }
+
+  getStatusFault() {
+    const { StatusFault } = this.Characteristic;
+    return this.state && hasFault(this.state) ? StatusFault.GENERAL_FAULT : StatusFault.NO_FAULT;
   }
 
   getTargetState() {
@@ -250,40 +268,27 @@ class MhiAccessory {
   }
 
   getCurrentState() {
-    const { Characteristic } = this;
-    const S = Characteristic.CurrentHeaterCoolerState;
-    if (this.heat('power') !== 'on') {
-      return S.INACTIVE;
-    }
-    const mode = this.heat('mode');
-    const actual = this.heat('actual_temperature');
-    const target = this.heat('set_temperature');
-    switch (mode) {
-      case 'heat':
+    const S = this.Characteristic.CurrentHeaterCoolerState;
+    switch (currentActivity(this.heatpump())) {
+      case 'heating':
         return S.HEATING;
-      case 'cool':
-      case 'dry':
+      case 'cooling':
         return S.COOLING;
-      case 'fan':
+      case 'idle':
         return S.IDLE;
-      case 'auto':
       default:
-        if (typeof actual === 'number' && typeof target === 'number') {
-          if (actual > target + 0.5) return S.COOLING;
-          if (actual < target - 0.5) return S.HEATING;
-        }
-        return S.IDLE;
+        return S.INACTIVE;
     }
   }
 
   getRotationSpeed() {
     const fan = this.heat('fan');
-    const idx = FAN_SPEEDS.indexOf(String(fan));
+    let idx = FAN_SPEEDS.indexOf(String(fan));
     if (idx === -1) {
-      // "auto" or unknown -> show full speed as a sane visual default.
-      return 100;
+      idx = FAN_SPEEDS.indexOf(this.lastManualFan);
     }
-    return (idx + 1) * 25;
+    // Auto before any manual speed was seen: full speed is the least surprising.
+    return idx === -1 ? 100 : (idx + 1) * 25;
   }
 
   getSwing() {
@@ -323,7 +328,8 @@ class MhiAccessory {
 
   setTargetTemperature(value) {
     // Round to the device's 0.5 step and debounce (slider drags fire rapidly).
-    const rounded = Math.round(value * 2) / 2;
+    const limits = temperatureLimits(this.heatpump(), this.heat('mode'));
+    const rounded = clamp(Math.round(value * 2) / 2, limits);
     this.debounce('set_temperature', () => this.command('set_temperature', rounded), 400);
   }
 
@@ -423,9 +429,7 @@ class MhiAccessory {
 
   async refresh() {
     try {
-      const state = await this.device.getState();
-      this.state = state;
-      this.applyState(state);
+      this.applyState(await this.device.getState());
     } catch (e) {
       this.log.debug(`[${this.name}] poll failed: ${e.message}`);
     }
@@ -434,23 +438,26 @@ class MhiAccessory {
   /** Push the freshly polled state into every characteristic. */
   applyState(state) {
     const { Characteristic } = this;
+    this.state = state;
     const hp = state.heatpump || {};
 
-    // Refine temperature limits from the device and remember climate mode.
-    const coolMin = Number(hp.coolmin);
-    const coolMax = Number(hp.coolmax);
-    if (Number.isFinite(coolMin) && Number.isFinite(coolMax) && coolMax > coolMin) {
-      if (coolMin !== this.minTemp || coolMax !== this.maxTemp) {
-        this.minTemp = coolMin;
-        this.maxTemp = coolMax;
-        const props = { minValue: this.minTemp, maxValue: this.maxTemp, minStep: TEMP_STEP };
-        this.hc.getCharacteristic(Characteristic.CoolingThresholdTemperature).setProps(props);
-        this.hc.getCharacteristic(Characteristic.HeatingThresholdTemperature).setProps(props);
-      }
+    const limits = JSON.stringify([this.thresholdProps('cool'), this.thresholdProps('heat')]);
+    if (limits !== this.appliedLimits) {
+      this.appliedLimits = limits;
+      this.hc
+        .getCharacteristic(Characteristic.CoolingThresholdTemperature)
+        .setProps(this.thresholdProps('cool'));
+      this.hc
+        .getCharacteristic(Characteristic.HeatingThresholdTemperature)
+        .setProps(this.thresholdProps('heat'));
     }
     if (hp.mode === 'heat' || hp.mode === 'cool' || hp.mode === 'auto') {
       this.lastClimateMode = hp.mode;
     }
+    if (FAN_SPEEDS.includes(String(hp.fan))) {
+      this.lastManualFan = String(hp.fan);
+    }
+    this.logProtectionChange((hp.op || {}).protection);
 
     // Accessory information from the firmware block.
     if (state.fw && state.fw.curr) {
@@ -473,12 +480,13 @@ class MhiAccessory {
     this.hc.updateCharacteristic(Characteristic.CurrentTemperature, this.getCurrentTemperature());
     this.hc.updateCharacteristic(
       Characteristic.CoolingThresholdTemperature,
-      this.getTargetTemperature()
+      this.getThresholdTemperature('cool')
     );
     this.hc.updateCharacteristic(
       Characteristic.HeatingThresholdTemperature,
-      this.getTargetTemperature()
+      this.getThresholdTemperature('heat')
     );
+    this.hc.updateCharacteristic(Characteristic.StatusFault, this.getStatusFault());
     this.hc.updateCharacteristic(Characteristic.RotationSpeed, this.getRotationSpeed());
     this.hc.updateCharacteristic(Characteristic.SwingMode, this.getSwing());
 
@@ -502,6 +510,21 @@ class MhiAccessory {
         Characteristic.On,
         hp.mode === 'fan' && hp.power === 'on'
       );
+    }
+
+    this.sensors.apply(state);
+  }
+
+  logProtectionChange(protection) {
+    if (protection === undefined || protection === this.lastProtection) {
+      return;
+    }
+    const wasAbnormal = this.lastProtection !== undefined && this.lastProtection !== 'Normal';
+    this.lastProtection = protection;
+    if (protection !== 'Normal') {
+      this.log.warn(`[${this.name}] Protection active: ${protection}`);
+    } else if (wasAbnormal) {
+      this.log.info(`[${this.name}] Protection back to normal`);
     }
   }
 }

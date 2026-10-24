@@ -12,10 +12,12 @@ Exposed as a HomeKit **Heater Cooler** accessory:
 | --- | --- |
 | On / Off | `power` |
 | Mode: Heat / Cool / Auto | `mode` (`heat` / `cool` / `auto`) |
-| Target temperature (16–31 °C, 0.5° steps) | `set_temperature` |
+| Target temperature (0.5° steps, limited to the device's heating/cooling range) | `set_temperature` |
 | Current temperature | `actual_temperature` |
 | Fan speed (4 steps) | `fan` (`1`–`4`) |
 | Swing (3D auto airflow) | `auto3d` |
+| Heating / Cooling / Idle (idle while the compressor is stopped or defrosting) | `mode`, `op.compr_freq`, `op.defrost` |
+| Fault (error code or lost connection to the indoor unit) | `error_code`, `sys.conhp` |
 
 Optional extra switches (toggle in settings):
 
@@ -23,6 +25,12 @@ Optional extra switches (toggle in settings):
 - **Auto Fan** → `fan=auto` (HomeKit's speed slider can't represent "auto", so it's a separate switch)
 - **Dry** → `mode=dry` (HomeKit Heater Cooler has no Dry mode)
 - **Fan Only** → `mode=fan`
+
+Read-only sensors (toggle in settings), added only while the device reports them:
+
+- **Outdoor** temperature sensor → `op.outdoor`
+- **Humidity** sensor and **Thermometer Battery** → paired wireless thermometer (`sensor.thermometer`)
+- **Window 1–4** contact sensors → paired window sensors (`sensor.window`, `sensor.window_1` … `sensor.window_3`)
 
 ## Installation
 
@@ -50,7 +58,10 @@ Use the Homebridge UI (recommended), or add to `config.json`:
           "exposeSilentMode": true,
           "exposeFanAuto": true,
           "exposeDryMode": false,
-          "exposeFanMode": false
+          "exposeFanMode": false,
+          "exposeOutdoorTemperature": true,
+          "exposeThermometer": true,
+          "exposeWindowSensors": true
         }
       ]
     }
@@ -67,6 +78,9 @@ Use the Homebridge UI (recommended), or add to `config.json`:
 | `exposeFanAuto` | `true` | Add an *Auto Fan* switch |
 | `exposeDryMode` | `false` | Add a *Dry* mode switch |
 | `exposeFanMode` | `false` | Add a *Fan Only* mode switch |
+| `exposeOutdoorTemperature` | `true` | Add an *Outdoor* temperature sensor |
+| `exposeThermometer` | `true` | Add *Humidity* and *Thermometer Battery* while a wireless thermometer is paired |
+| `exposeWindowSensors` | `true` | Add a contact sensor per paired window sensor |
 
 > **Tip:** Give the unit a static DHCP lease (or rely on its `.local` mDNS name) so the `host` stays stable.
 
@@ -84,7 +98,10 @@ The plugin polls `/control` every `pollInterval` seconds and maps the `heatpump`
 ## Notes & limitations
 
 - HomeKit's Heater Cooler service only models Heat / Cool / Auto. **Dry** and **Fan-only** modes are therefore exposed as optional switches.
-- The device has a single `set_temperature`, so the Heating and Cooling threshold sliders both drive (and reflect) that one setpoint.
+- The device has a single `set_temperature`, so the Heating and Cooling threshold sliders both drive (and reflect) that one setpoint. The Heating slider uses the device's heating range, the Cooling slider its cooling range.
+- When the fan runs on *auto*, the speed slider keeps showing the last manual speed.
+- Protection states reported by the unit (e.g. high-pressure protection) are logged as warnings.
+- The window sensor state format couldn't be verified without a paired sensor. Unrecognised values are logged once instead of guessed.
 - Fan speed maps the 4 hardware steps onto the HomeKit slider (25 % each). Setting the slider to 0 % powers the unit off.
 
 ## License

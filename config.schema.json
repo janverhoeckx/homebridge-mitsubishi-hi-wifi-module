@@ -60,6 +60,23 @@
               "title": "Expose 'Fan Only' mode switch",
               "type": "boolean",
               "default": false
+            },
+            "exposeOutdoorTemperature": {
+              "title": "Expose outdoor temperature sensor",
+              "type": "boolean",
+              "default": true
+            },
+            "exposeThermometer": {
+              "title": "Expose wireless thermometer humidity and battery",
+              "type": "boolean",
+              "default": true,
+              "description": "Only shown while a wireless thermometer is paired to the module."
+            },
+            "exposeWindowSensors": {
+              "title": "Expose window sensors",
+              "type": "boolean",
+              "default": true,
+              "description": "One contact sensor per window sensor paired to the module."
             }
           }
         }
@@ -80,7 +97,10 @@
         "devices[].exposeSilentMode",
         "devices[].exposeFanAuto",
         "devices[].exposeDryMode",
-        "devices[].exposeFanMode"
+        "devices[].exposeFanMode",
+        "devices[].exposeOutdoorTemperature",
+        "devices[].exposeThermometer",
+        "devices[].exposeWindowSensors"
       ]
     }
   ]
